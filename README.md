@@ -1,7 +1,7 @@
 # RunPod CLI Manager
 
 A command-line tool for managing RunPod instances via the RunPod API, based on 
-[Apollo Research's original runpod_cli tool](https://github.com/ApolloResearch/runpod_cli/tree/legacy).
+[Apollo Research's original runpod_cli tool](https://github.com/SergioHC95/runpod_cli/tree/legacy).
 
 This version makes several changes:
 - Uses **RunPod’s S3 API** to provision startup scripts & host keys (no manual volume setup).
@@ -30,7 +30,7 @@ is not a change from the original runpod_cli, but worth keeping in mind.)
 ### Option 1: Install as a `uv` tool (recommended)
 
 ```bash
-git clone https://github.com/ApolloResearch/runpod_cli.git
+git clone https://github.com/SergioHC95/runpod_cli.git
 cd runpod_cli
 uv tool install -e .
 uv tool update-shell   # ensure uv’s bin dir is on PATH
@@ -40,7 +40,7 @@ uv tool update-shell   # ensure uv’s bin dir is on PATH
 ### Option 2: Install with pip
 
 ```bash
-git clone https://github.com/ApolloResearch/runpod_cli.git
+git clone https://github.com/SergioHC95/runpod_cli.git
 cd runpod_cli
 pip install -e .
 ```
@@ -48,7 +48,7 @@ pip install -e .
 ### Option 3: Install requirements only (not recommended, for backwards compatibility)
 
 ```bash
-git clone https://github.com/ApolloResearch/runpod_cli.git
+git clone https://github.com/SergioHC95/runpod_cli.git
 cd runpod_cli
 pip install -r requirements.txt
 # In this case use: python src/runpod_cli/cli.py
