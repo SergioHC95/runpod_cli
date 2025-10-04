@@ -3,4 +3,4 @@
 !.env.example
 __pycache__/
 build/
-*.egg-info/.env
+*.egg-info/
