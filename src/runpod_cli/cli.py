@@ -65,17 +65,21 @@ class RunPodManager:
     """RunPod Management CLI - A command-line tool for managing RunPod instances via the RunPod API.
 
     Available commands:
-        create      Create a new pod with specified parameters
-        list        List all pods in your account
-        terminate   Terminate a specific pod
+        create      Create a new pod with specified parameters (defaults: 1× RTX 5090, 60 minutes)
+        list        List all pods in your account with filtering and formatting options
+        marketplace Query available GPU types, pricing, and specifications
+        terminate   Terminate a specific pod or all running pods
 
     Global options:
         --env       Path to the .env file (optional). If not provided, will search for .env files in default locations.
 
     Examples:
-        rpc create --gpu_type="RTX A4000" --runtime=60
+        rpc create --gpu_type="RTX 5090" --runtime=60
         rpc list
+        rpc marketplace
+        rpc marketplace --gpu_type="H100"
         rpc terminate --pod_id=YOUR_POD_ID
+        rpc terminate
         rpc --env=/path/to/custom.env list
     """
 
@@ -185,33 +189,286 @@ class RunPodManager:
                 raise ValueError(f"Unknown GPU type: {gpu_type}")
         return gpu_id, gpu_name
 
-    def list(self, verbose: bool = False) -> None:
+    def list(self, verbose: bool = False, status: Optional[str] = None, format: str = "detailed") -> None:
         """List all pods in your RunPod account.
+
+        Args:
+            verbose: Show additional details like IP, port, and resource information
+            status: Filter pods by status (running, stopped, provisioning, etc.)
+            format: Output format - 'detailed' (default), 'table', or 'compact'
 
         Displays information about each pod including ID, name, GPU type, status, and connection details.
         """
         pods = runpod.get_pods()  # type: ignore
 
+        # Filter by status if specified
+        if status:
+            status_lower = status.lower()
+            pods = [pod for pod in pods if pod.get('desiredStatus', '').lower() == status_lower or 
+                   pod.get('lastStatusChange', '').lower().find(status_lower) != -1]
+
+        if not pods:
+            if status:
+                logging.info(f"No pods found with status: {status}")
+            else:
+                logging.info("No pods found in your account.")
+            return
+
+        if format == "table":
+            self._list_table_format(pods, verbose)
+        elif format == "compact":
+            self._list_compact_format(pods)
+        else:
+            self._list_detailed_format(pods, verbose)
+
+    def _list_detailed_format(self, pods: List[Dict], verbose: bool) -> None:
+        """Display pods in detailed format (original format)."""
         for i, pod in enumerate(pods):
             logging.info(f"Pod {i + 1}:")
             logging.info(f"  ID: {pod.get('id')}")
             logging.info(f"  Name: {pod.get('name')}")
+            logging.info(f"  Status: {self._get_pod_status(pod)}")
+            
+            # GPU information
+            gpu_count = pod.get('gpuCount', 0)
+            gpu_name = pod.get('machine', {}).get('gpuDisplayName', 'Unknown')
+            logging.info(f"  GPUs: {gpu_count} x {gpu_name}")
+            
+            # Region and cost
+            region = pod.get('machine', {}).get('podHostId', 'Unknown')
+            cost_per_hr = pod.get('costPerHr', 0)
+            logging.info(f"  Region: {region}")
+            logging.info(f"  Cost: ${cost_per_hr:.4f}/hr")
+            
             time_remaining = self._parse_time_remaining(pod)
             logging.info(f"  Time remaining (est.): {time_remaining}")
+            
             if verbose:
-                public_ip, public_port = self._get_public_ip_and_port(pod)
-                logging.info(f"  Public IP: {public_ip}")
-                logging.info(f"  Public port: {public_port}")
-                logging.info(f"  GPUs: {pod.get('gpuCount')} x {pod.get('machine', {}).get('gpuDisplayName')}")
-                for key in ["memoryInGb", "vcpuCount", "containerDiskInGb", "volumeMountPath", "costPerHr"]:
-                    logging.info(f"  {key}: {pod.get(key)}")
+                try:
+                    public_ip, public_port = self._get_public_ip_and_port(pod)
+                    logging.info(f"  Public IP: {public_ip}")
+                    logging.info(f"  Public port: {public_port}")
+                except (ValueError, TypeError):
+                    logging.info(f"  Connection: Not available")
+                
+                for key in ["memoryInGb", "vcpuCount", "containerDiskInGb", "volumeMountPath"]:
+                    value = pod.get(key, 'N/A')
+                    logging.info(f"  {key}: {value}")
+                
+                # Image information
+                image = pod.get('imageName', 'Unknown')
+                logging.info(f"  Image: {image}")
+                
+                # Creation time
+                created_at = pod.get('createdAt', '')
+                if created_at:
+                    logging.info(f"  Created: {created_at}")
+            
             logging.info("")
+
+    def _list_table_format(self, pods: List[Dict], verbose: bool) -> None:
+        """Display pods in table format."""
+        if verbose:
+            header = f"{'ID':<12} {'Name':<20} {'Status':<12} {'GPUs':<15} {'Region':<10} {'Cost/hr':<10} {'IP:Port':<20} {'Time Left':<12}"
+        else:
+            header = f"{'ID':<12} {'Name':<20} {'Status':<12} {'GPUs':<15} {'Cost/hr':<10} {'Time Left':<12}"
+        
+        logging.info(header)
+        logging.info("-" * len(header))
+        
+        for pod in pods:
+            pod_id = pod.get('id', '')[:11]
+            name = pod.get('name', '')[:19]
+            status = self._get_pod_status(pod)[:11]
+            
+            gpu_count = pod.get('gpuCount', 0)
+            gpu_name = pod.get('machine', {}).get('gpuDisplayName', 'Unknown')
+            gpu_short = gpu_name.replace('NVIDIA ', '').replace('GeForce ', '')[:14]
+            gpus = f"{gpu_count}x {gpu_short}"
+            
+            cost = f"${pod.get('costPerHr', 0):.3f}"
+            time_left = self._parse_time_remaining(pod)[:11]
+            
+            if verbose:
+                region = pod.get('machine', {}).get('podHostId', 'Unknown')[:9]
+                try:
+                    ip, port = self._get_public_ip_and_port(pod)
+                    connection = f"{ip}:{port}"[:19]
+                except (ValueError, TypeError):
+                    connection = "N/A"
+                
+                row = f"{pod_id:<12} {name:<20} {status:<12} {gpus:<15} {region:<10} {cost:<10} {connection:<20} {time_left:<12}"
+            else:
+                row = f"{pod_id:<12} {name:<20} {status:<12} {gpus:<15} {cost:<10} {time_left:<12}"
+            
+            logging.info(row)
+
+    def _list_compact_format(self, pods: List[Dict]) -> None:
+        """Display pods in compact format."""
+        for pod in pods:
+            pod_id = pod.get('id', '')[:8]
+            name = pod.get('name', '')
+            status = self._get_pod_status(pod)
+            gpu_count = pod.get('gpuCount', 0)
+            gpu_name = pod.get('machine', {}).get('gpuDisplayName', 'Unknown')
+            gpu_short = gpu_name.replace('NVIDIA ', '').replace('GeForce ', '')
+            cost = pod.get('costPerHr', 0)
+            
+            logging.info(f"{pod_id} | {name} | {status} | {gpu_count}x{gpu_short} | ${cost:.3f}/hr")
+
+    def _get_pod_status(self, pod: Dict) -> str:
+        """Extract and format pod status."""
+        # Try to get status from various fields
+        desired_status = pod.get('desiredStatus', '')
+        if desired_status:
+            return desired_status.title()
+        
+        # Check runtime status
+        runtime = pod.get('runtime')
+        if runtime:
+            if runtime.get('ports'):
+                return "Running"
+            else:
+                return "Starting"
+        
+        # Check last status change for clues
+        last_status = pod.get('lastStatusChange', '')
+        if 'running' in last_status.lower():
+            return "Running"
+        elif 'stopped' in last_status.lower():
+            return "Stopped"
+        elif 'provisioning' in last_status.lower():
+            return "Provisioning"
+        
+        return "Unknown"
+
+    def marketplace(self, gpu_type: Optional[str] = None) -> None:
+        """Query available GPU types, pricing, and specifications.
+
+        Args:
+            gpu_type: Filter by specific GPU type (e.g., "RTX A4000", "H100")
+
+        Shows GPU types with pricing for both secure and community clouds.
+        """
+        
+        try:
+            availability_data = self._get_gpu_availability()
+            
+            # Filter by GPU type if specified
+            if gpu_type:
+                gpu_id, _ = self._get_gpu_id(gpu_type)
+                availability_data = [item for item in availability_data if item.get('gpuTypeId') == gpu_id]
+            
+            if not availability_data:
+                logging.info("No available GPU types found matching your criteria.")
+                return
+            
+            self._display_availability_table(availability_data)
+                
+        except Exception as e:
+            logging.error(f"Failed to query GPU availability: {e}")
+
+    def _get_gpu_availability(self) -> List[Dict]:
+        """Query RunPod GraphQL API for GPU availability and pricing."""
+        api_key = os.getenv("RUNPOD_API_KEY")
+        
+        # Enhanced GraphQL query to get more GPU information
+        query = """
+        query {
+            gpuTypes {
+                id
+                displayName
+                memoryInGb
+                secureCloud
+                communityCloud
+                maxGpuCount
+                manufacturer
+                cudaCores
+                securePrice: lowestPrice(input: {gpuCount: 1, secureCloud: true}) {
+                    minimumBidPrice
+                    uninterruptablePrice
+                }
+                communityPrice: lowestPrice(input: {gpuCount: 1, secureCloud: false}) {
+                    minimumBidPrice
+                    uninterruptablePrice
+                }
+            }
+        }
+        """
+        
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.post(
+            "https://api.runpod.io/graphql",
+            json={"query": query},
+            headers=headers
+        )
+        
+        if response.status_code != 200:
+            raise ValueError(f"GraphQL query failed: {response.text}")
+        
+        data = response.json()
+        if "errors" in data:
+            raise ValueError(f"GraphQL errors: {data['errors']}")
+        
+        gpu_types = data.get("data", {}).get("gpuTypes", [])
+        
+        # Convert to enhanced format
+        availability_list = []
+        for gpu_type in gpu_types:
+            availability_list.append({
+                "gpuTypeId": gpu_type["id"],
+                "displayName": gpu_type["displayName"],
+                "memoryInGb": gpu_type["memoryInGb"],
+                "maxGpuCount": gpu_type.get("maxGpuCount", 1),
+                "manufacturer": gpu_type.get("manufacturer", "Unknown"),
+                "cudaCores": gpu_type.get("cudaCores", 0),
+                "secureCloud": gpu_type.get("secureCloud", False),
+                "communityCloud": gpu_type.get("communityCloud", False),
+                "securePrice": gpu_type.get("securePrice", {}),
+                "communityPrice": gpu_type.get("communityPrice", {}),
+                # Keep legacy field for backward compatibility
+                "lowestPrice": gpu_type.get("securePrice", {}),
+                "stockStatus": "Available"  # Default since we can't get real stock status
+            })
+        
+        return availability_list
+
+    def _display_availability_table(self, availability_data: List[Dict]) -> None:
+        """Display GPU availability in table format."""
+        header = f"{'GPU Type':<20} {'Memory':<8} {'Max GPUs':<9} {'Sec Spot':<12} {'Sec On-Demand':<15} {'Com Spot':<14} {'Com On-Demand':<17}"
+        logging.info(header)
+        logging.info("-" * len(header))
+        
+        for item in availability_data:
+            gpu_name = item.get("displayName", "Unknown")[:19]
+            memory = f"{item.get('memoryInGb', 0)}GB"
+            max_gpus = str(item.get('maxGpuCount', 1))
+            
+            # Secure cloud pricing
+            secure_price = item.get("securePrice", {})
+            secure_spot = f"${secure_price.get('minimumBidPrice', 0):.3f}" if secure_price.get('minimumBidPrice') else "N/A"
+            secure_demand = f"${secure_price.get('uninterruptablePrice', 0):.3f}" if secure_price.get('uninterruptablePrice') else "N/A"
+            
+            # Community cloud pricing
+            community_price = item.get("communityPrice", {})
+            community_spot = f"${community_price.get('minimumBidPrice', 0):.3f}" if community_price.get('minimumBidPrice') else "N/A"
+            community_demand = f"${community_price.get('uninterruptablePrice', 0):.3f}" if community_price.get('uninterruptablePrice') else "N/A"
+            
+            row = f"{gpu_name:<20} {memory:<8} {max_gpus:<9} {secure_spot:<12} {secure_demand:<15} {community_spot:<14} {community_demand:<17}"
+            logging.info(row)
+
+
+
 
     def create(
         self,
         name: Optional[str] = None,
         runtime: int = 60,
-        gpu_type: str = "RTX A4000",
+        gpu_type: str = "RTX 5090",
         cpus: int = 1,
         disk: int = 30,
         forward_agent: bool = False,
@@ -226,7 +483,7 @@ class RunPodManager:
 
         Args:
             runtime: Time in minutes for pod to run (default: 60)
-            gpu_type: GPU type (default: "RTX A4000")
+            gpu_type: GPU type (default: "RTX 5090")
             num_gpus: Number of GPUs (default: 1)
             name: Name for the pod (default: "$USER-$GPU_TYPE")
             env: Path to credentials .env (defalt: .env and ~/.config/runpod_cli/.env)
@@ -240,7 +497,7 @@ class RunPodManager:
 
         Example:
             rpc create -r 60 -g "A100 SXM"
-            rpc create --gpu_type="RTX A4000" --runtime=480
+            rpc create --gpu_type="RTX 5090" --runtime=480
         """
         gpu_id, gpu_name = self._get_gpu_id(gpu_type)
         name = name or f"{os.getenv('USER')}-{gpu_name}"
@@ -340,17 +597,55 @@ class RunPodManager:
             except Exception as e:
                 logging.error(f"Error adding host key: {e}")
 
-    def terminate(self, pod_id: str) -> None:
-        """Terminate a specific RunPod instance.
+    def terminate(self, pod_id: Optional[str] = None) -> None:
+        """Terminate RunPod instance(s).
 
         Args:
-            pod_id: ID of the pod to terminate
+            pod_id: ID of the specific pod to terminate. If not provided, terminates ALL running pods.
 
-        Example:
-            rpc terminate --pod_id=abc123
+        Examples:
+            rpc terminate --pod_id=abc123    # Terminate specific pod
+            rpc terminate                    # Terminate ALL running pods
         """
-        logging.info(f"Terminating pod {pod_id}")
-        _ = runpod.terminate_pod(pod_id)
+        if pod_id:
+            # Terminate specific pod
+            logging.info(f"Terminating pod {pod_id}")
+            _ = runpod.terminate_pod(pod_id)
+            logging.info(f"Pod {pod_id} termination requested")
+        else:
+            # Terminate all pods
+            logging.info("Getting list of all pods...")
+            pods = runpod.get_pods()  # type: ignore
+            
+            if not pods:
+                logging.info("No pods found in your account.")
+                return
+            
+            # Filter for running pods
+            running_pods = [pod for pod in pods if pod.get('desiredStatus', '').upper() == 'RUNNING']
+            
+            if not running_pods:
+                logging.info("No running pods found to terminate.")
+                return
+            
+            logging.info(f"Found {len(running_pods)} running pod(s) to terminate:")
+            for pod in running_pods:
+                pod_id = pod.get('id')
+                pod_name = pod.get('name', 'Unknown')
+                logging.info(f"  - {pod_id} ({pod_name})")
+            
+            # Terminate all running pods
+            for pod in running_pods:
+                pod_id = pod.get('id')
+                pod_name = pod.get('name', 'Unknown')
+                try:
+                    logging.info(f"Terminating pod {pod_id} ({pod_name})...")
+                    _ = runpod.terminate_pod(pod_id)
+                    logging.info(f"  ✓ Termination requested for {pod_id}")
+                except Exception as e:
+                    logging.error(f"  ✗ Failed to terminate {pod_id}: {e}")
+            
+            logging.info("All running pods termination requested.")
 
 
 def main():
