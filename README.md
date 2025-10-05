@@ -86,10 +86,10 @@ You can run the CLI either as:
 - `python -m runpod_cli`
 
 ### Available commands
-- `rpc create` — Create a pod (defaults: 1× **RTX A4000**, **60 minutes**).
+- `rpc create` — Create a pod (defaults: 1× **RTX 5090**, **60 minutes**).
 - `rpc list` — List your pods.
-- `rpc available` — Query available GPU types, pricing, and stock across all RunPod regions.
 - `rpc terminate` — Terminate a specific pod.
+- `rpc marketplace` — Query available GPU types, pricing, and stock across RunPod.
 
 ### Examples
 
@@ -97,18 +97,12 @@ You can run the CLI either as:
 Create a dev pod with one A4000 GPU for 1 hour (these are also the default values):
 
 ```bash
-rpc create --gpu_type "RTX A4000" --runtime 60
+rpc create --gpu_type "RTX 5090" --runtime 60
 ```
 
 Create a dev pod with two A100 GPUs for 4 hours (adjust PCIe to SXM if needed):
 ```bash
 rpc create --gpu_type "A100 PCIe" --runtime 240 --gpu_count 2
-```
-
-#### Checking availability
-Check all available GPU types and pricing:
-```bash
-rpc available
 ```
 
 ## Python environment recommendations
