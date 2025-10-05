@@ -10,7 +10,11 @@ This version makes several changes:
   container disk, so your venvs can reuse them via `--system-site-packages`.
 - Quality-of-life improvements:
   - Automatically adds pod **SSH host keys** to your local `known_hosts` (retrieved over HTTPS via S3).
-  - 
+  - Remote-SSH (Cursor / VS Code) integration: when a pod is created, a remote host added/updated with alias `runpod-<network_volume_id>`. To open host locally:
+    1. Command Palette → **Remote-SSH: Connect to Host…**
+    2. Choose **`runpod`**
+    3. Select **Linux**, then **Open Folder** → `/workspace`
+
   - Optional global git config on pod (`GIT_NAME`, `GIT_EMAIL`).
   - Installs **Claude Code** and **Codex** on pod startup.
   - Defaults the pod name to `<username>-<gpu>`.
@@ -89,7 +93,7 @@ You can run the CLI either as:
 - `rpc create` — Create a pod (defaults: 1× **RTX 5090**, **60 minutes**).
 - `rpc list` — List your pods.
 - `rpc terminate` — Terminate a specific pod.
-- `rpc marketplace` — Query available GPU types, pricing, and stock across RunPod.
+- `rpc marketplace` — Query available GPU types, pricing, and stock across all RunPod regions.
 
 ### Examples
 
@@ -97,13 +101,17 @@ You can run the CLI either as:
 Create a dev pod with one A4000 GPU for 1 hour (these are also the default values):
 
 ```bash
-rpc create --gpu_type "RTX 5090" --runtime 60
+rpc create --gpu_type "RTX A4000" --runtime 60
 ```
 
 Create a dev pod with two A100 GPUs for 4 hours (adjust PCIe to SXM if needed):
 ```bash
 rpc create --gpu_type "A100 PCIe" --runtime 240 --gpu_count 2
 ```
+
+
+
+
 
 ## Python environment recommendations
 

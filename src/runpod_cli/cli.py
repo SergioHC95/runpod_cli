@@ -11,6 +11,8 @@ import fire
 import requests
 from dotenv import load_dotenv
 
+import runpod  # noqa: E402
+
 try:
     from .utils import (
         DEFAULT_IMAGE_NAME,
@@ -32,10 +34,9 @@ except ImportError:
         get_terminate,
     )
 
+from .ssh_config import upsert_host, upsert_host_windows, copy_known_hosts_to_windows, ensure_windows_has_private_key, remove_host_windows
+
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-
-import runpod  # noqa: E402
-
 
 def get_region_from_volume_id(volume_id: str) -> str:
     api_key = os.getenv("RUNPOD_API_KEY")
@@ -67,8 +68,8 @@ class RunPodManager:
     Available commands:
         create      Create a new pod with specified parameters (defaults: 1× RTX 5090, 60 minutes)
         list        List all pods in your account with filtering and formatting options
-        marketplace Query available GPU types, pricing, and specifications
         terminate   Terminate a specific pod or all running pods
+        marketplace Query available GPU types, pricing, and specifications
 
     Global options:
         --env       Path to the .env file (optional). If not provided, will search for .env files in default locations.
@@ -113,6 +114,7 @@ class RunPodManager:
             endpoint_url=s3_endpoint_url,
             region_name=self._region,
         )
+        self._alias = f"runpod-{self._network_volume_id}"
 
     def _build_docker_args(self, volume_mount_path: str, runpodcli_dir: str, runtime: int) -> str:
         runpodcli_path = f"{volume_mount_path}/{runpodcli_dir}"
@@ -189,13 +191,12 @@ class RunPodManager:
                 raise ValueError(f"Unknown GPU type: {gpu_type}")
         return gpu_id, gpu_name
 
-    def list(self, verbose: bool = False, status: Optional[str] = None, format: str = "detailed") -> None:
+    def list(self, verbose: bool = False, status: Optional[str] = None) -> None:
         """List all pods in your RunPod account.
 
         Args:
             verbose: Show additional details like IP, port, and resource information
             status: Filter pods by status (running, stopped, provisioning, etc.)
-            format: Output format - 'detailed' (default), 'table', or 'compact'
 
         Displays information about each pod including ID, name, GPU type, status, and connection details.
         """
@@ -214,12 +215,7 @@ class RunPodManager:
                 logging.info("No pods found in your account.")
             return
 
-        if format == "table":
-            self._list_table_format(pods, verbose)
-        elif format == "compact":
-            self._list_compact_format(pods)
-        else:
-            self._list_detailed_format(pods, verbose)
+        self._list_detailed_format(pods, verbose)
 
     def _list_detailed_format(self, pods: List[Dict], verbose: bool) -> None:
         """Display pods in detailed format (original format)."""
@@ -265,56 +261,6 @@ class RunPodManager:
                     logging.info(f"  Created: {created_at}")
             
             logging.info("")
-
-    def _list_table_format(self, pods: List[Dict], verbose: bool) -> None:
-        """Display pods in table format."""
-        if verbose:
-            header = f"{'ID':<12} {'Name':<20} {'Status':<12} {'GPUs':<15} {'Region':<10} {'Cost/hr':<10} {'IP:Port':<20} {'Time Left':<12}"
-        else:
-            header = f"{'ID':<12} {'Name':<20} {'Status':<12} {'GPUs':<15} {'Cost/hr':<10} {'Time Left':<12}"
-        
-        logging.info(header)
-        logging.info("-" * len(header))
-        
-        for pod in pods:
-            pod_id = pod.get('id', '')[:11]
-            name = pod.get('name', '')[:19]
-            status = self._get_pod_status(pod)[:11]
-            
-            gpu_count = pod.get('gpuCount', 0)
-            gpu_name = pod.get('machine', {}).get('gpuDisplayName', 'Unknown')
-            gpu_short = gpu_name.replace('NVIDIA ', '').replace('GeForce ', '')[:14]
-            gpus = f"{gpu_count}x {gpu_short}"
-            
-            cost = f"${pod.get('costPerHr', 0):.3f}"
-            time_left = self._parse_time_remaining(pod)[:11]
-            
-            if verbose:
-                region = pod.get('machine', {}).get('podHostId', 'Unknown')[:9]
-                try:
-                    ip, port = self._get_public_ip_and_port(pod)
-                    connection = f"{ip}:{port}"[:19]
-                except (ValueError, TypeError):
-                    connection = "N/A"
-                
-                row = f"{pod_id:<12} {name:<20} {status:<12} {gpus:<15} {region:<10} {cost:<10} {connection:<20} {time_left:<12}"
-            else:
-                row = f"{pod_id:<12} {name:<20} {status:<12} {gpus:<15} {cost:<10} {time_left:<12}"
-            
-            logging.info(row)
-
-    def _list_compact_format(self, pods: List[Dict]) -> None:
-        """Display pods in compact format."""
-        for pod in pods:
-            pod_id = pod.get('id', '')[:8]
-            name = pod.get('name', '')
-            status = self._get_pod_status(pod)
-            gpu_count = pod.get('gpuCount', 0)
-            gpu_name = pod.get('machine', {}).get('gpuDisplayName', 'Unknown')
-            gpu_short = gpu_name.replace('NVIDIA ', '').replace('GeForce ', '')
-            cost = pod.get('costPerHr', 0)
-            
-            logging.info(f"{pod_id} | {name} | {status} | {gpu_count}x{gpu_short} | ${cost:.3f}/hr")
 
     def _get_pod_status(self, pod: Dict) -> str:
         """Extract and format pod status."""
@@ -553,6 +499,15 @@ class RunPodManager:
         logging.info("Pod provisioned.")
 
         ip, port = self._get_public_ip_and_port(pod)
+        
+        # Mirror the same SSH alias into the main ~/.ssh/config so Remote-SSH (Cursor) sees it.
+        
+        try:
+            upsert_host(alias=self._alias, ip=ip, port=int(port), user="user", identity_file=None, mirror_to_main=True)
+            logging.info(f"SSH alias '{self._alias}' mirrored into ~/.ssh/config (for Cursor Remote-SSH).")
+        except Exception as e:
+            logging.warning(f"Skipping main SSH config mirror: {e}")
+
 
         if update_ssh_config:
             self._write_ssh_config(ip, port, forward_agent)
@@ -560,10 +515,23 @@ class RunPodManager:
         if update_known_hosts:
             time.sleep(5)
             self._update_known_hosts_file(ip, port, runpodcli_dir)
+        
+        # --- Mirror into Windows' SSH config for Cursor on Windows (when invoked from WSL) ---
+        try:
+            # 1) Ensure Windows has the same private key as WSL; get "~/.ssh/<name>" for IdentityFile
+            identity_file = ensure_windows_has_private_key(identity_name="id_ed25519")
+            # 2) Upsert the same host into Windows ~/.ssh/config (with IdentityFile & IdentitiesOnly)
+            upsert_host_windows(alias=self._alias, ip=ip, port=int(port), user="user", identity_file=identity_file)
+            # 3) Copy known_hosts.runpod_cli so Windows OpenSSH trusts the host
+            copy_known_hosts_to_windows()
+            logging.info(f"SSH alias '{self._alias}' mirrored into Windows ~/.ssh/config (for Cursor Remote-SSH).")
+        except Exception as e:
+            logging.warning(f"Skipping Windows SSH mirror: {e}")
+
 
     def _generate_ssh_config(self, ip: str, port: int, forward_agent: bool = False) -> str:
         return textwrap.dedent(f"""
-            Host runpod
+            Host {self._alias}
               HostName {ip}
               User user
               Port {port}
@@ -646,7 +614,11 @@ class RunPodManager:
                     logging.error(f"  ✗ Failed to terminate {pod_id}: {e}")
             
             logging.info("All running pods termination requested.")
-
+        
+        try:
+            remove_host_windows(self._alias)
+        except Exception:
+            pass
 
 def main():
     fire.Fire(RunPodManager)
