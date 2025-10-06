@@ -36,7 +36,25 @@ except ImportError:
 
 from .ssh_config import upsert_host, upsert_host_windows, copy_known_hosts_to_windows, ensure_windows_has_private_key, remove_host_windows
 
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(asctime)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+logging.basicConfig(level=logging.INFO, format="%(message)s", datefmt="%H:%M:%S")
+
+# Suppress verbose output from runpod library
+import os
+import sys
+from contextlib import contextmanager
+
+os.environ['RUNPOD_DEBUG'] = 'false'
+
+@contextmanager
+def quiet():
+    """Suppress stdout during runpod API calls."""
+    old_stdout = sys.stdout
+    sys.stdout = open(os.devnull, 'w')
+    try:
+        yield
+    finally:
+        sys.stdout.close()
+        sys.stdout = old_stdout
 
 def get_region_from_volume_id(volume_id: str) -> str:
     api_key = os.getenv("RUNPOD_API_KEY")
@@ -105,6 +123,7 @@ class RunPodManager:
         self._network_volume_id: str = getenv("RUNPOD_NETWORK_VOLUME_ID")
         s3_access_key_id = getenv("RUNPOD_S3_ACCESS_KEY_ID")
         s3_secret_key = getenv("RUNPOD_S3_SECRET_KEY")
+        self._hf_token = os.getenv("HUGGINGFACE_HUB_TOKEN", "")
         self._region = get_region_from_volume_id(self._network_volume_id)
         s3_endpoint_url = get_s3_endpoint_from_volume_id(self._network_volume_id)
         self._s3 = boto3.client(
@@ -210,9 +229,9 @@ class RunPodManager:
 
         if not pods:
             if status:
-                logging.info(f"No pods found with status: {status}")
+                logging.info(f"📭 No pods found with status: {status}")
             else:
-                logging.info("No pods found in your account.")
+                logging.info("📭 No pods found in your account.")
             return
 
         self._list_detailed_format(pods, verbose)
@@ -220,47 +239,47 @@ class RunPodManager:
     def _list_detailed_format(self, pods: List[Dict], verbose: bool) -> None:
         """Display pods in detailed format (original format)."""
         for i, pod in enumerate(pods):
-            logging.info(f"Pod {i + 1}:")
-            logging.info(f"  ID: {pod.get('id')}")
-            logging.info(f"  Name: {pod.get('name')}")
-            logging.info(f"  Status: {self._get_pod_status(pod)}")
+            logging.info(f"\n📦 Pod {i + 1}: {pod.get('name', 'Unnamed')}")
+            logging.info(f"  🆔 ID: {pod.get('id')}")
+            logging.info(f"  📊 Status: {self._get_pod_status(pod)}")
             
             # GPU information
             gpu_count = pod.get('gpuCount', 0)
             gpu_name = pod.get('machine', {}).get('gpuDisplayName', 'Unknown')
-            logging.info(f"  GPUs: {gpu_count} x {gpu_name}")
+            logging.info(f"  🎮 GPUs: {gpu_count}× {gpu_name}")
             
             # Region and cost
             region = pod.get('machine', {}).get('podHostId', 'Unknown')
             cost_per_hr = pod.get('costPerHr', 0)
-            logging.info(f"  Region: {region}")
-            logging.info(f"  Cost: ${cost_per_hr:.4f}/hr")
+            logging.info(f"  🌐 Region: {region}")
+            logging.info(f"  💰 Cost: ${cost_per_hr:.4f}/hr")
             
             time_remaining = self._parse_time_remaining(pod)
-            logging.info(f"  Time remaining (est.): {time_remaining}")
+            logging.info(f"  ⏱️  Time remaining: {time_remaining}")
             
             if verbose:
                 try:
                     public_ip, public_port = self._get_public_ip_and_port(pod)
-                    logging.info(f"  Public IP: {public_ip}")
-                    logging.info(f"  Public port: {public_port}")
+                    logging.info(f"  🌍 Public IP: {public_ip}:{public_port}")
                 except (ValueError, TypeError):
-                    logging.info(f"  Connection: Not available")
+                    logging.info(f"  🔌 Connection: Not available")
                 
-                for key in ["memoryInGb", "vcpuCount", "containerDiskInGb", "volumeMountPath"]:
-                    value = pod.get(key, 'N/A')
-                    logging.info(f"  {key}: {value}")
+                # Show key specs
+                memory = pod.get('memoryInGb', 'N/A')
+                vcpus = pod.get('vcpuCount', 'N/A')
+                disk = pod.get('containerDiskInGb', 'N/A')
+                logging.info(f"  💾 Memory: {memory} GB")
+                logging.info(f"  🖥️  vCPUs: {vcpus}")
+                logging.info(f"  💿 Disk: {disk} GB")
                 
                 # Image information
                 image = pod.get('imageName', 'Unknown')
-                logging.info(f"  Image: {image}")
+                logging.info(f"  🐳 Image: {image}")
                 
                 # Creation time
                 created_at = pod.get('createdAt', '')
                 if created_at:
-                    logging.info(f"  Created: {created_at}")
-            
-            logging.info("")
+                    logging.info(f"  📅 Created: {created_at}")
 
     def _get_pod_status(self, pod: Dict) -> str:
         """Extract and format pod status."""
@@ -417,7 +436,7 @@ class RunPodManager:
         gpu_type: str = "RTX 5090",
         cpus: int = 1,
         disk: int = 30,
-        forward_agent: bool = False,
+        forward_agent: bool = True,
         image_name: str = DEFAULT_IMAGE_NAME,
         memory: int = 1,
         num_gpus: int = 1,
@@ -436,7 +455,7 @@ class RunPodManager:
             disk: Container disk size in GB (default: 30)
             cpus: Minimum CPU count (default: 1)
             memory: Minimum RAM in GB (default: 1)
-            forward_agent: Whether to forward SSH agent (default: False)
+            forward_agent: Whether to forward SSH agent (default: True)
             update_known_hosts: Whether to update known hosts (default: True)
             update_ssh_config: Whether to update SSH config (default: True)
             image_name: Docker image (default: "PyTorch 2.8.0 with CUDA 12.8.1")
@@ -449,18 +468,13 @@ class RunPodManager:
         name = name or f"{os.getenv('USER')}-{gpu_name}"
         runpodcli_dir = f".tmp_{name.replace(' ', '_')}"
 
-        logging.info("Creating pod with:")
-        logging.info(f"  Name: {name}")
-        logging.info(f"  Image: {image_name}")
-        logging.info(f"  Network volume ID: {self._network_volume_id}")
-        logging.info(f"  Region: {self._region}")
-        logging.info(f"  GPU Type: {gpu_type}")
-        logging.info(f"  GPU Count: {num_gpus}")
-        logging.info(f"  Disk: {disk} GB")
-        logging.info(f"  Min CPU: {cpus}")
-        logging.info(f"  Min Memory: {memory} GB")
-        logging.info(f"  runpodcli directory: {runpodcli_dir}")
-        logging.info(f"  Time limit: {runtime} minutes")
+        logging.info(f"🚀 Creating pod with:")
+        logging.info(f"  • Name: {name}")
+        logging.info(f"  • Image: {image_name}")
+        logging.info(f"  • Region: {self._region}")
+        logging.info(f"  • GPU: {num_gpus}× {gpu_name}")
+        logging.info(f"  • Disk: {disk} GB")
+        logging.info(f"  • Runtime: {runtime} minutes")
 
         git_email = os.getenv("GIT_EMAIL", "")
         git_name = os.getenv("GIT_NAME", "")
@@ -478,36 +492,43 @@ class RunPodManager:
 
         docker_args = self._build_docker_args(volume_mount_path=volume_mount_path, runpodcli_dir=runpodcli_dir, runtime=runtime)
 
-        pod = runpod.create_pod(
-            name=name,
-            image_name=image_name,
-            gpu_type_id=gpu_id,
-            cloud_type="SECURE",
-            gpu_count=num_gpus,
-            container_disk_in_gb=disk,
-            min_vcpu_count=cpus,
-            min_memory_in_gb=memory,
-            docker_args=docker_args,
-            ports="8888/http,22/tcp",
-            volume_mount_path=volume_mount_path,
-            network_volume_id=self._network_volume_id,
-        )
+        # Prepare environment variables
+        env_vars = {}
+        if self._hf_token:
+            env_vars["HUGGINGFACE_HUB_TOKEN"] = self._hf_token
+
+        with quiet():
+            pod = runpod.create_pod(
+                name=name,
+                image_name=image_name,
+                gpu_type_id=gpu_id,
+                cloud_type="SECURE",
+                gpu_count=num_gpus,
+                container_disk_in_gb=disk,
+                min_vcpu_count=cpus,
+                min_memory_in_gb=memory,
+                docker_args=docker_args,
+                ports="8888/http,22/tcp",
+                volume_mount_path=volume_mount_path,
+                network_volume_id=self._network_volume_id,
+                env=env_vars,
+            )
 
         pod_id: str = pod.get("id")  # type: ignore
-        logging.info("Pod created. Provisioning...")
+        
+        logging.info(f"⏳ Pod created! Provisioning...")
         pod = self._provision_and_wait(pod_id)
-        logging.info("Pod provisioned.")
+        logging.info(f"✅ Pod provisioned and ready!")
 
         ip, port = self._get_public_ip_and_port(pod)
         
         # Mirror the same SSH alias into the main ~/.ssh/config so Remote-SSH (Cursor) sees it.
         
         try:
-            upsert_host(alias=self._alias, ip=ip, port=int(port), user="user", identity_file=None, mirror_to_main=True)
-            logging.info(f"SSH alias '{self._alias}' mirrored into ~/.ssh/config (for Cursor Remote-SSH).")
+            upsert_host(alias=self._alias, ip=ip, port=int(port), user="user", identity_file=None, mirror_to_main=True, forward_agent=forward_agent)
+            logging.info(f"🔧 SSH alias '{self._alias}' configured for Cursor Remote-SSH")
         except Exception as e:
-            logging.warning(f"Skipping main SSH config mirror: {e}")
-
+            logging.warning(f"⚠️  Skipping SSH config: {e}")
 
         if update_ssh_config:
             self._write_ssh_config(ip, port, forward_agent)
@@ -518,18 +539,19 @@ class RunPodManager:
         
         # --- Mirror into Windows' SSH config for Cursor on Windows (when invoked from WSL) ---
         try:
-            # 1) Ensure Windows has the same private key as WSL; get "~/.ssh/<name>" for IdentityFile
             identity_file = ensure_windows_has_private_key(identity_name="id_ed25519")
-            # 2) Upsert the same host into Windows ~/.ssh/config (with IdentityFile & IdentitiesOnly)
-            upsert_host_windows(alias=self._alias, ip=ip, port=int(port), user="user", identity_file=identity_file)
-            # 3) Copy known_hosts.runpod_cli so Windows OpenSSH trusts the host
+            upsert_host_windows(alias=self._alias, ip=ip, port=int(port), user="user", identity_file=identity_file, forward_agent=forward_agent)
             copy_known_hosts_to_windows()
-            logging.info(f"SSH alias '{self._alias}' mirrored into Windows ~/.ssh/config (for Cursor Remote-SSH).")
+            logging.info(f"🪟  Windows SSH config updated")
         except Exception as e:
-            logging.warning(f"Skipping Windows SSH mirror: {e}")
+            logging.warning(f"⚠️  Skipping Windows SSH config: {e}")
+
+        logging.info(f"🎉 Ready to connect!")
+        logging.info(f"  • SSH: ssh {self._alias}")
+        logging.info(f"  • IP:  {ip}:{port}")
 
 
-    def _generate_ssh_config(self, ip: str, port: int, forward_agent: bool = False) -> str:
+    def _generate_ssh_config(self, ip: str, port: int, forward_agent: bool = True) -> str:
         return textwrap.dedent(f"""
             Host {self._alias}
               HostName {ip}
@@ -539,11 +561,11 @@ class RunPodManager:
               {"ForwardAgent yes" if forward_agent else ""}
         """).strip()
 
-    def _write_ssh_config(self, ip: str, port: int, forward_agent: bool, config_path: str = "~/.ssh/config.runpod_cli") -> None:
+    def _write_ssh_config(self, ip: str, port: int, forward_agent: bool = True, config_path: str = "~/.ssh/config.runpod_cli") -> None:
         runpod_config = self._generate_ssh_config(ip=ip, port=port, forward_agent=forward_agent)
         with open(os.path.expanduser(config_path), "w") as f:
             f.write(runpod_config)
-        logging.info(f"SSH config at {config_path} updated")
+        # logging.info(f"SSH config at {config_path} updated")
 
     def _update_known_hosts_file(self, public_ip: str, port: int, runpodcli_dir: str) -> None:
         host_keys: List[Tuple[str, str]] = []
@@ -561,7 +583,7 @@ class RunPodManager:
             try:
                 with open(known_hosts_path, "a") as dest:
                     dest.write(f"# runpod cli:\n[{public_ip}]:{port} {alg} {key}\n")
-                logging.info(f"Added {alg} host key to {known_hosts_path}")
+                # logging.info(f"Added {alg} host key to {known_hosts_path}")
             except Exception as e:
                 logging.error(f"Error adding host key: {e}")
 
@@ -577,43 +599,42 @@ class RunPodManager:
         """
         if pod_id:
             # Terminate specific pod
-            logging.info(f"Terminating pod {pod_id}")
+            logging.info(f"🛑 Terminating pod {pod_id}...")
             _ = runpod.terminate_pod(pod_id)
-            logging.info(f"Pod {pod_id} termination requested")
+            logging.info(f"✅ Termination requested for {pod_id}")
         else:
             # Terminate all pods
-            logging.info("Getting list of all pods...")
+            logging.info("🔍 Getting list of all pods...")
             pods = runpod.get_pods()  # type: ignore
             
             if not pods:
-                logging.info("No pods found in your account.")
+                logging.info("📭 No pods found in your account.")
                 return
             
             # Filter for running pods
             running_pods = [pod for pod in pods if pod.get('desiredStatus', '').upper() == 'RUNNING']
             
             if not running_pods:
-                logging.info("No running pods found to terminate.")
+                logging.info("💤 No running pods found to terminate.")
                 return
             
-            logging.info(f"Found {len(running_pods)} running pod(s) to terminate:")
+            logging.info(f"📋 Found {len(running_pods)} running pod(s) to terminate:")
             for pod in running_pods:
                 pod_id = pod.get('id')
                 pod_name = pod.get('name', 'Unknown')
-                logging.info(f"  - {pod_id} ({pod_name})")
+                logging.info(f"  • {pod_name} ({pod_id})")
             
-            # Terminate all running pods
+            logging.info(f"🛑 Terminating pods...")
             for pod in running_pods:
                 pod_id = pod.get('id')
                 pod_name = pod.get('name', 'Unknown')
                 try:
-                    logging.info(f"Terminating pod {pod_id} ({pod_name})...")
                     _ = runpod.terminate_pod(pod_id)
-                    logging.info(f"  ✓ Termination requested for {pod_id}")
+                    logging.info(f"  • {pod_name}")
                 except Exception as e:
-                    logging.error(f"  ✗ Failed to terminate {pod_id}: {e}")
+                    logging.error(f"  ❌ {pod_name} - {e}")
             
-            logging.info("All running pods termination requested.")
+            logging.info(f"🎉 All termination requests sent!")
         
         try:
             remove_host_windows(self._alias)

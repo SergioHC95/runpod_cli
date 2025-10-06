@@ -47,7 +47,7 @@ def add_known_host(ip: str, port: int):
             with KH.open("a", encoding="utf-8") as f: f.write(r.stdout)
     except Exception: pass  # best-effort
 
-def render_host_block(alias: str, ip: str, port: int, user: str, identity_file: str | None = None) -> str:
+def render_host_block(alias: str, ip: str, port: int, user: str, identity_file: str | None = None, forward_agent: bool = True) -> str:
     lines = [
         f"Host {alias}",
         f"    HostName {ip}",
@@ -59,12 +59,14 @@ def render_host_block(alias: str, ip: str, port: int, user: str, identity_file: 
     if identity_file:
         lines.insert(4, f"    IdentityFile {identity_file}")
         lines.append("    IdentitiesOnly yes")
+    if forward_agent:
+        lines.append("    ForwardAgent yes")
     return "\n".join(lines) + "\n"
 
 def upsert_host(alias: str, ip: str, port: int, user: str,
-                identity_file: str | None = None, mirror_to_main: bool = False):
+                identity_file: str | None = None, mirror_to_main: bool = False, forward_agent: bool = True):
     ensure_include()
-    block = render_host_block(alias, ip, port, user, identity_file)
+    block = render_host_block(alias, ip, port, user, identity_file, forward_agent)
     _upsert(INC, alias, block)
     add_known_host(ip, port)
     if mirror_to_main:
@@ -149,13 +151,13 @@ def ensure_windows_has_private_key(identity_name: str = "id_ed25519") -> str | N
     except Exception:
         return None
 
-def upsert_host_windows(alias: str, ip: str, port: int, user: str, identity_file: str | None = None) -> None:
+def upsert_host_windows(alias: str, ip: str, port: int, user: str, identity_file: str | None = None, forward_agent: bool = True) -> None:
     paths = _win_ssh_paths()
     if paths is None:
         return
     ssh_dir, cfg, _ = paths
     ssh_dir.mkdir(parents=True, exist_ok=True)
-    block = render_host_block(alias=alias, ip=ip, port=port, user=user, identity_file=identity_file)
+    block = render_host_block(alias=alias, ip=ip, port=port, user=user, identity_file=identity_file, forward_agent=forward_agent)
     _upsert(cfg, alias, block)
     try:
         os.chmod(cfg, 0o600)
@@ -191,7 +193,7 @@ def remove_host_windows(alias: str) -> None:
         return
     s = cfg.read_text(encoding="utf-8", errors="ignore")
     out, i = [], 0
-    for m in _HOST_BLOCK_RE.finditer(s):
+    for m in _BLOCK.finditer(s):
         start, end = m.span()
         if m.group("alias") == alias:
             out.append(s[i:start]); i = end

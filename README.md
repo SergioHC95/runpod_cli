@@ -12,10 +12,11 @@ This version makes several changes:
   - Automatically adds pod **SSH host keys** to your local `known_hosts` (retrieved over HTTPS via S3).
   - Remote-SSH (Cursor / VS Code) integration: when a pod is created, a remote host added/updated with alias `runpod-<network_volume_id>`. To open host locally:
     1. Command Palette → **Remote-SSH: Connect to Host…**
-    2. Choose **`runpod`**
+    2. Choose **`runpod-<volume_id>`**
     3. Select **Linux**, then **Open Folder** → `/workspace`
 
   - Optional global git config on pod (`GIT_NAME`, `GIT_EMAIL`).
+  - **Automatic HuggingFace authentication**: If `HUGGINGFACE_HUB_TOKEN` is in your `.env`, pods automatically authenticate with HF and can download gated models without manual login.
   - Installs **Claude Code** and **Codex** on pod startup.
   - Defaults the pod name to `<username>-<gpu>`.
   - Allows **GPU display name or ID** (e.g. `"RTX A4000"` or `"NVIDIA RTX A4000"`).
@@ -80,6 +81,7 @@ cp .env.example ~/.config/runpod_cli/.env
 - `RUNPOD_S3_ACCESS_KEY_ID` – S3 access key for the volume
 - `RUNPOD_S3_SECRET_KEY` – S3 secret key for the volume
 - (Optional) `GIT_NAME`, `GIT_EMAIL` – global git config on the pod
+- (Optional) `HUGGINGFACE_HUB_TOKEN` – your HuggingFace token for automatic authentication and gated model access
 
 *Note: If you use a RunPod team, the team account needs to create those API keys.*
 

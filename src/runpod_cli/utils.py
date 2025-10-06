@@ -61,6 +61,13 @@ def get_setup_root(runpodcli_path: str, volume_mount_path: str) -> Tuple[str, st
         # Set NNSIGHT_LOG_PATH to avoid https://github.com/ndif-team/nnsight/issues/495
         echo "export NNSIGHT_LOG_PATH=/root/.local/state/nnsight" >> /root/.profile
         echo "export NNSIGHT_LOG_PATH=/home/user/.local/state/nnsight" >> /home/user/.profile
+        
+        # Source and export HuggingFace env to user account
+        if [ -f /tmp/hf_env.sh ]; then
+            cat /tmp/hf_env.sh >> /home/user/.profile
+            cat /tmp/hf_env.sh >> /home/user/.bashrc
+        fi
+        
         chown user:user /home/user/.profile
         mkdir -p  /home/user/.ssh/
         cat /root/.ssh/authorized_keys >> /home/user/.ssh/authorized_keys
@@ -130,6 +137,13 @@ def get_setup_user(runpodcli_path: str, git_email: str, git_name: str) -> Tuple[
         # Create a virtual environment for the user
         python_version=$(python --version | cut -d' ' -f2 | cut -d'.' -f1-2)
         uv venv ~/.venv --python $python_version --system-site-packages
+        
+        # Auto-login to HuggingFace if token is available
+        if [ -n "$HUGGINGFACE_HUB_TOKEN" ]; then
+            echo "Logging in to HuggingFace..."
+            huggingface-cli login --token "$HUGGINGFACE_HUB_TOKEN" --add-to-git-credential
+        fi
+        
         echo "...user setup completed!"
     """.replace("RUNPODCLI_PATH", runpodcli_path)
         .replace("GIT_EMAIL", git_email)
@@ -194,12 +208,19 @@ def get_start(runpodcli_path: str) -> Tuple[str, str]:
 
         export_env_vars() {
             echo "Exporting environment variables..."
-            printenv | grep -E '^RUNPOD_|^PATH=|^_=' | awk -F = '{ print "export " $1 "=\"" $2 "\"" }' >> ~/.runpod_env
+            printenv | grep -E '^RUNPOD_|^HUGGINGFACE_|^PATH=|^_=' | awk -F = '{ print "export " $1 "=\"" $2 "\"" }' >> ~/.runpod_env
             echo 'source ~/.runpod_env' >> ~/.bashrc
+            
+            # Also write to a shared location for user account
+            printenv | grep -E '^HUGGINGFACE_' | awk -F = '{ print "export " $1 "=\"" $2 "\"" }' >> /tmp/hf_env.sh
         }
 
         setup_ssh
         export_env_vars
+        
+        # Source the env vars before running setup scripts
+        source ~/.runpod_env
+        
         bash RUNPODCLI_PATH/setup_root.sh
         su -c "bash RUNPODCLI_PATH/setup_user.sh" user
 
