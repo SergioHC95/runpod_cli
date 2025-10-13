@@ -23,7 +23,7 @@ This version makes several changes:
 
 ⚠️ These changes rely on [RunPod’s S3 API](https://docs.runpod.io/serverless/storage/s3-api),
 which is currently available only in some regions. Ensure your network volume is in one of:
-`EUR-IS-1`, `EU-RO-1`, `EU-CZ-1`, `US-KS-2`.
+`EUR-IS-1`, `EU-RO-1`, `EU-CZ-1`, `US-KS-2`, `US-CA-2`.
 
 🔒 **Security note:** Your RunPod keys are stored on the pod at `/root/.runpod_env` and are
 accessible to anyone who can log in to the pod. This includes team members whose SSH keys are
@@ -72,7 +72,9 @@ Include ~/.ssh/config.runpod_cli
 2. Copy `.env.example` to `~/.config/runpod_cli/.env` and add your RunPod credentials:
 ```bash
 mkdir -p ~/.config/runpod_cli
-cp .env.example ~/.config/runpod_cli/.env
+cp .env.example .env
+cp .env ~/.config/runpod_cli/.env
+#'/home/sergio/.config/runpod_cli/.env'
 ```
 
 3. Fill the following variables in `~/.config/runpod_cli/.env`:
@@ -81,7 +83,9 @@ cp .env.example ~/.config/runpod_cli/.env
 - `RUNPOD_S3_ACCESS_KEY_ID` – S3 access key for the volume
 - `RUNPOD_S3_SECRET_KEY` – S3 secret key for the volume
 - (Optional) `GIT_NAME`, `GIT_EMAIL` – global git config on the pod
+- (Optional) `GIT_REPO_URL` – repository URL to automatically clone into `/workspace` on pod startup (e.g., `https://github.com/username/repo.git`)
 - (Optional) `HUGGINGFACE_HUB_TOKEN` – your HuggingFace token for automatic authentication and gated model access
+- (Optional) `SSH_PUBLIC_KEY_PATH` – path to your SSH public key (e.g., `~/.ssh/id_ed25519.pub`). If not set, automatically detects from standard locations. Alternatively, add your key to [RunPod account settings](https://console.runpod.io/user/settings).
 
 *Note: If you use a RunPod team, the team account needs to create those API keys.*
 
@@ -153,7 +157,6 @@ ERROR  | Uncaught exception | <class 'TypeError'>; Inspector.__init__() missing 
 - Allow for persistent bash history
 - Set UV_LINK_MODE=copy or move the uv cache
 - Find a better way to wait for ssh keys to be generated than `time.sleep(5)`
-- Allow user to configre an SSH_PUBLIC_KEY_PATH in .env
 - Pre-install VS Code / Cursor server
 - Change names & ssh aliases if a user requests multiple GPUs (e.g. runpod, runpod-1, etc.)
 - Create a .config/runpod_cli/config file to change the default values (e.g. GPU type, runtime, etc.)
