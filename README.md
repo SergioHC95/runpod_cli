@@ -73,7 +73,7 @@ Include ~/.ssh/config.runpod_cli
 ```bash
 mkdir -p ~/.config/runpod_cli
 cp .env.example .env
-cp .env ~/.config/runpod_cli/.env
+cp .env ~/.config/runpod_cli/.env # Check if not needed
 #'/home/sergio/.config/runpod_cli/.env'
 ```
 
