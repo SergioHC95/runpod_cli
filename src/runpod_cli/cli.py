@@ -484,7 +484,7 @@ class RunPodManager:
         runtime: int = 60,
         gpu_type: str = "RTX 5090",
         cpus: int = 1,
-        disk: int = 30,
+        disk: int = 100,
         forward_agent: bool = True,
         image_name: str = DEFAULT_IMAGE_NAME,
         memory: int = 1,

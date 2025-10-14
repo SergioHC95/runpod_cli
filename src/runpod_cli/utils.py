@@ -2,7 +2,8 @@ import textwrap
 from typing import Tuple
 
 # Default Docker image for pods
-DEFAULT_IMAGE_NAME = "runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04"
+# DEFAULT_IMAGE_NAME = "runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04"
+DEFAULT_IMAGE_NAME = "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 
 # GPU display name to ID mapping from https://docs.runpod.io/references/gpu-types
 GPU_DISPLAY_NAME_TO_ID = {
